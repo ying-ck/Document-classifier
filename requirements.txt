@@ -1,0 +1,8 @@
+scikit-learn
+python-pptx
+python-docx
+PyPDF2
+joblib
+tqdm
+jieba
+
