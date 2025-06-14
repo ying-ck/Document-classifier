@@ -3,10 +3,11 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.metrics import accuracy_score
+from packaging import version
 from tkinter import Tk, filedialog, StringVar, Label, Entry, Button, Frame, messagebox, Toplevel, OptionMenu
 from pptx import Presentation
 from docx import Document
-import jieba, json, os, joblib, PyPDF2
+import jieba, json, os, joblib, PyPDF2, winreg, sys, requests, threading
 
 
 # 读取pptx文件
@@ -281,22 +282,62 @@ def model_use():
                 if t != False and len(t.split()) > 15:  # 跳过文本内容过少的文档，至少10个词
                     f.append(i)
                     lis.append(t)
-            except:
-                pass
-    vectorizer = joblib.load(os.path.join(tmp['modph'], config['nmod'], 'vectorizer.pkl'))
-    clf = joblib.load(os.path.join(tmp['modph'], config['nmod'], 'classifier.pkl'))
+            except Exception as e:
+                print(f"处理文件 {i} 时发生错误: {str(e)}")
+    
     if not lis or len(lis) == 0:
         print("输入列表为空，无法进行预测。")
         return
-    prediction = clf.predict(vectorizer.transform(lis))
-    for i in range(len(f)):
-        t = os.path.join(config['save'], prediction[i])
-        if not os.path.exists(t):
-            os.makedirs(t)
-        if config['sepmd'] == 1:
-            os.rename(os.path.join(config['collect'], f[i]), os.path.join(t, f[i]))
-        elif config['sepmd'] == 2:
-            copy_file(os.path.join(config['collect'], f[i]), os.path.join(t, f[i]))
+    
+    try:
+        vectorizer_path = os.path.join(tmp['modph'], config['nmod'], 'vectorizer.pkl')
+        classifier_path = os.path.join(tmp['modph'], config['nmod'], 'classifier.pkl')
+        
+        if not os.path.exists(vectorizer_path) or not os.path.exists(classifier_path):
+            print("模型文件缺失，请检查模型路径和文件完整性")
+            return
+            
+        vectorizer = joblib.load(vectorizer_path)
+        clf = joblib.load(classifier_path)
+        
+        prediction = clf.predict(vectorizer.transform(lis))
+        
+        for i in range(len(f)):
+            try:
+                t = os.path.join(config['save'], prediction[i])
+                
+                # 创建目标目录（如果不存在）
+                if not os.path.exists(t):
+                    os.makedirs(t)
+                    
+                src_path = os.path.join(config['collect'], f[i])
+                dst_path = os.path.join(t, f[i])
+                
+                # 文件操作重试机制（最多3次）
+                max_retries = 3
+                retry_count = 0
+                
+                if config['sepmd'] == 1:  # 移动文件
+                    while retry_count <= max_retries:
+                        try:
+                            os.rename(src_path, dst_path)
+                            break
+                        except Exception as e:
+                            retry_count += 1
+                            if retry_count > max_retries:
+                                print(f"移动文件失败：{src_path} -> {dst_path}，错误信息：{str(e)}")
+                                raise
+                            print(f"第 {retry_count} 次重试移动文件：{src_path}")
+                            
+                elif config['sepmd'] == 2:  # 复制文件
+                    copy_file(src_path, dst_path)
+                    
+            except Exception as e:
+                print(f"处理文件 {f[i]} 时发生错误: {str(e)}")
+                continue
+                
+    except Exception as e:
+        print(f"加载模型或预测过程中发生错误: {str(e)}")
 
 
 # 复制文件
@@ -336,9 +377,9 @@ def select_directory(tip):
 # 读取配置文件
 def config_rd():
     global config
-    if not os.path.exists('data'):
-        os.makedirs('data')
-    cfgph = os.path.join('data', 'config.json')
+    if not os.path.exists(os.path.join(os.path.dirname(__file__), 'data')):
+        os.makedirs(os.path.join(os.path.dirname(__file__), 'data'))
+    cfgph = os.path.join(os.path.dirname(__file__), 'data', 'config.json')
     if os.path.exists(cfgph):
         with open(cfgph, 'r') as file:
             config = json.load(file)
@@ -347,7 +388,7 @@ def config_rd():
 # 保存配置文件
 def config_sv():
     global config
-    with open(os.path.join('data', 'config.json'), 'w') as file:
+    with open(os.path.join(os.path.dirname(__file__), 'data', 'config.json'), 'w') as file:
         json.dump(config, file)
 
 
@@ -402,7 +443,7 @@ def change_config(r):
 # 程序初始化
 def initialize():
     config_rd()
-    tmp['modph'] = os.path.join('data', 'model')
+    tmp['modph'] = os.path.join(os.path.dirname(__file__), 'data', 'model')
     if not os.path.exists(tmp['modph']):
         os.makedirs(tmp['modph'])
     if config['collect'] == '' or not os.path.exists(config['collect']):
@@ -415,12 +456,118 @@ def initialize():
         config_sv()
 
 
+# 设置程序开机自启
+def set_autostart():
+    try:
+        # 获取当前脚本的绝对路径
+        current_path = os.path.abspath(sys.argv[0])
+
+        # 如果是打包后的exe文件，获取实际路径
+        if getattr(sys, 'frozen', False):
+            current_path = sys.executable
+        elif __file__:
+            current_path = os.path.abspath(__file__)
+
+        # 获取注册表启动项的键值
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
+                             winreg.KEY_SET_VALUE)
+
+        # 设置开机自启（将程序名称和路径写入注册表）
+        winreg.SetValueEx(key, "DocumentClassifier", 0, winreg.REG_SZ, f'"{current_path}" -cl')
+        winreg.CloseKey(key)
+        return True
+    except Exception as e:
+        print(f"设置开机自启失败：{str(e)}")
+        return False
+
+
+# 取消程序开机自启
+def unset_autostart():
+    try:
+        # 打开注册表启动项的键
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
+                             winreg.KEY_SET_VALUE)
+
+        # 删除自启项
+        winreg.DeleteValue(key, "DocumentClassifier")
+        winreg.CloseKey(key)
+        return True
+    except FileNotFoundError:
+        # 如果键不存在，说明已经没有设置自启
+        return True
+    except Exception as e:
+        print(f"取消开机自启失败：{str(e)}")
+        return False
+
+
+# 检查程序是否已设置为开机自启
+def check_autostart():
+    try:
+        # 打开注册表启动项的键
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
+                             winreg.KEY_READ)
+
+        # 尝试读取值
+        i = 0
+        while True:
+            name, value, type = winreg.EnumValue(key, i)
+            if name == "DocumentClassifier":
+                winreg.CloseKey(key)
+                return True
+            i += 1
+    except OSError:
+        # 当枚举完所有值或发生错误时退出
+        pass
+    finally:
+        try:
+            winreg.CloseKey(key)
+        except:
+            pass
+    return False
+
+#自动从github获取最新版本信息
+def check_latest_version():
+    global latest_version
+    try:
+        response = requests.get(
+            'https://api.github.com/repos/ying-ck/Document-classifier/releases/latest',
+            timeout=10
+        )
+        response.raise_for_status()  # 检查请求是否成功
+        latest_version = response.json()['tag_name']
+
+        skipped_version = None
+        if os.path.exists('data'):
+            skip_file = os.path.join('data', 'skip_update.txt')
+            if os.path.exists(skip_file):
+                with open(skip_file, 'r') as f:
+                    skipped_version = f.read().strip()
+        
+        if version.parse(latest_version) > version.parse(ver) and latest_version != skipped_version:
+            dialog = messagebox.askyesnocancel("新版本可用", "检测到新版本，是否前往GitHub下载？\n点击'是'将打开项目页面\n点击'否'将不再提示此版本更新\n点击'取消'跳过本次操作")
+            
+            if dialog is True:
+                os.startfile("https://github.com/ying-ck/Document-classifier/releases")
+            elif dialog is False:
+                skip_file = os.path.join('data', 'skip_update.txt')
+                with open(skip_file, 'w') as f:
+                    f.write(latest_version)
+                    
+    except (requests.RequestException, KeyError) as e:
+        print(f"获取版本信息失败: {e}")
+        latest_version = "未知版本"
+
+
 # 外部数据与必要设置
-ver = 'v1.1.0'
-jieba.set_dictionary(os.path.join('data', 'dict.txt'))
+ver = 'v1.1.1'
+jieba.set_dictionary(os.path.join(os.path.dirname(__file__), 'data', 'dict.txt'))
 config = {'nmod': 'default', 'collect': '', 'save': '', 'sepmd': 1}
 tmp = {}
 initialize()
+latest_version = None
+version_thread = threading.Thread(target=check_latest_version)
+version_thread.daemon = True
+version_thread.start()
 
 # 可视化界面相关代码
 class DocumentClassifierGUI:
@@ -509,7 +656,7 @@ class SettingsWindow:
         
         # 设置窗口大小和位置
         window_width = 500
-        window_height = 300
+        window_height = 325
         screen_width = parent.winfo_screenwidth()
         screen_height = parent.winfo_screenheight()
         x = (screen_width/2) - (window_width/2)
@@ -562,6 +709,22 @@ class SettingsWindow:
         self.model_menu = OptionMenu(self.model_frame, self.model_var, *self.available_models)
         self.model_menu.pack(side="left", expand=True, fill="x")
         
+        # 开机自启选项
+        self.autostart_frame = Frame(self.window)
+        self.autostart_frame.pack(pady=10, padx=20, fill="x")
+        self.autostart_label = Label(self.autostart_frame, text="开机自动分类(Beta):")
+        self.autostart_label.pack(side="left")
+        
+        # 获取当前自启动状态
+        self.is_autostart = check_autostart()
+        self.autostart_state = StringVar(value="已启用" if self.is_autostart else "未启用")
+        
+        self.autostart_status = Label(self.autostart_frame, textvariable=self.autostart_state, width=10)
+        self.autostart_status.pack(side="left", padx=(5, 0))
+        
+        self.autostart_toggle = Button(self.autostart_frame, text="更改", width=10, command=self.toggle_autostart)
+        self.autostart_toggle.pack(side="left", padx=(5, 0))
+        
         # 处理方式
         self.sepmd_frame = Frame(self.window)
         self.sepmd_frame.pack(pady=10, padx=20, fill="x")
@@ -597,6 +760,21 @@ class SettingsWindow:
         config['sepmd'] = 2 if current == 1 else 1
         self.sepmd_var.set("移动" if config['sepmd'] == 1 else "复制")
     
+    def toggle_autostart(self):
+        """切换开机自启状态"""
+        if self.is_autostart:
+            success = unset_autostart()
+            if success:
+                self.is_autostart = False
+                self.autostart_state.set("未启用")
+                messagebox.showinfo("提示", "已关闭开机自启！")
+        else:
+            success = set_autostart()
+            if success:
+                self.is_autostart = True
+                self.autostart_state.set("已启用")
+                messagebox.showinfo("提示", "已设置开机自启！")
+    
     def save_settings(self):
         # 如果没有可用模型且用户未选择，则提示
         if not self.available_models:
@@ -615,7 +793,26 @@ class SettingsWindow:
 
 # 主程序入口
 if __name__ == '__main__':
-    root = Tk()
-    app = DocumentClassifierGUI(root)
-    root.mainloop()
-    
+    if len(sys.argv) > 1:
+        if sys.argv[1] == '--help' or sys.argv[1] == '-h':
+            print('使用方法：python main.py [--help | -h] [--version | -v] [--config | -c] [--classify | -cl]')
+            print('--help | -h：显示帮助信息')
+            print('--version | -v：显示版本信息')
+            print('--config | -c：修改配置')
+            print('--classify | -cl：开始分类文档')
+        elif sys.argv[1] == '--version' or sys.argv[1] == '-v':
+            print(ver)
+        elif sys.argv[1] == '--config' or sys.argv[1] == '-c':
+            if sys.argv[2:]:
+                change_config(sys.argv[2])
+            else:
+                change_config(input('请选择要修改的配置：collect 收集文件夹 save 存放文件夹 nmod 模型 sepmd 处理方式\n'))
+        elif  sys.argv[1] == '--classify' or sys.argv[1] == '-cl':
+            model_use()
+        else:
+            print('无效的参数！')
+    else:
+        root = Tk()
+        app = DocumentClassifierGUI(root)
+        root.mainloop()
+
