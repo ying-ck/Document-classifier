@@ -17,6 +17,6 @@
 ## 模型分享
 觉得好的模型可以打包上传本github仓库model文件夹。
 ## 开源
-本程序使用[AGPL-3.0](https://github.com/ying-ck/Document-classifier?tab=AGPL-3.0-1-ov-file)开源，使用本程序等同于您已阅读并同意此许可内容。
+本程序使用[Apache-2.0](https://github.com/ying-ck/Document-classifier?tab=Apache-2.0-1-ov-file)开源，使用本程序等同于您已阅读并同意此许可内容。
 ## Star趋势
 ![Stars](https://api.star-history.com/svg?repos=ying-ck/Document-classifier&type=Date)
